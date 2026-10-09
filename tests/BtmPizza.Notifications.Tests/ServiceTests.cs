@@ -183,7 +183,7 @@ public sealed class ServiceTests(ServiceFixture fx) : IClassFixture<ServiceFixtu
 
         var (status, json) = await Send(new
         {
-            type = "WALLET_UPDATE",
+            type = "COINS_EARNED",
             title = "You earned 120 Dough Coins",
             body = "Balance is now 860.",
             target = new { user_ids = new[] { "u9", "nobody" } },
@@ -215,14 +215,14 @@ public sealed class ServiceTests(ServiceFixture fx) : IClassFixture<ServiceFixtu
             Assert.True(fx.SigningKey.VerifyData(Encoding.ASCII.GetBytes($"{jwt[0]}.{jwt[1]}"), Base64UrlDecode(jwt[2]), HashAlgorithmName.SHA256));
 
             Assert.Empty(IosContractProblems(r.Body));
-            Assert.Equal("WALLET_UPDATE", r.Body["aps"]!["thread-id"]!.GetValue<string>());
+            Assert.Equal("COINS_EARNED", r.Body["aps"]!["thread-id"]!.GetValue<string>());
         }
 
         // 410 and 400 BadDeviceToken are deleted; other 400s are kept.
         Assert.Equal(2L, Scalar("SELECT COUNT(*) FROM devices WHERE user_id = 'u9'"));
         Assert.Equal(0L, Scalar($"SELECT COUNT(*) FROM devices WHERE device_token IN ('{Token("bb")}', '{Token("cc")}')"));
 
-        Assert.Equal("WALLET_UPDATE", Scalar($"SELECT type FROM notification_log WHERE notification_id = '{notificationId}'"));
+        Assert.Equal("COINS_EARNED", Scalar($"SELECT type FROM notification_log WHERE notification_id = '{notificationId}'"));
         Assert.Equal(1L, Scalar($"SELECT success_count FROM notification_log WHERE notification_id = '{notificationId}'"));
         Assert.Equal(3L, Scalar($"SELECT failure_count FROM notification_log WHERE notification_id = '{notificationId}'"));
     }
