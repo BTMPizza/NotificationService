@@ -1,6 +1,6 @@
-bin/
-obj/
-data/
+**/bin/
+**/obj/
+/data/
 *.user
 .vs/
 .idea/
