@@ -9,7 +9,7 @@ namespace BtmPizza.Notifications.Payload;
 
 public static class NotificationTypes
 {
-    public static readonly string[] All = ["OFFER", "WALLET_UPDATE", "PIZZA_NEWS"];
+    public static readonly string[] All = ["OFFER", "WALLET_UPDATE", "PIZZA_NEWS", "CUSTOMER_REFERRAL"];
 }
 
 public sealed class ValidationException(IReadOnlyList<string> errors) : Exception(string.Join("; ", errors))

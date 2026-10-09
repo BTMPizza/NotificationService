@@ -39,5 +39,15 @@ public static class Samples
                 "Smoky peri peri paneer, roasted peppers and onions on our hand-tossed base.",
                 "Available now for dine-in and delivery."),
         },
+        ["CUSTOMER_REFERRAL"] = new JsonObject
+        {
+            ["type"] = "CUSTOMER_REFERRAL",
+            ["title"] = "Your friend just joined BTM Pizza",
+            ["body"] = "Riya used your referral code · 200 Dough Coins are on their way.",
+            ["kicker"] = "Referral reward",
+            ["article"] = new JsonArray(
+                "Riya signed up with your referral code and placed their first order.",
+                "200 Dough Coins have been added to your wallet. Keep sharing your code to earn more."),
+        },
     };
 }
