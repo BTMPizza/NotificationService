@@ -1,0 +1,16 @@
+**/bin/
+**/obj/
+# Secrets and local data must never end up in the image; in k8s they come from a Secret / PVC.
+config/
+data/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.p8
+.git/
+.vs/
+.vscode/
+.idea/
+tests/
+*.md
+prompt.txt

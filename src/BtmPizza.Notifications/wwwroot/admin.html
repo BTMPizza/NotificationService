@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BTM Pizza Notifications</title>
+<style>
+  :root { --bg: #fff; --fg: #1d1d1f; --muted: #6e6e73; --line: #d2d2d7; --accent: #c8102e; --err: #b00020; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1c1c1e; --fg: #f5f5f7; --muted: #a1a1a6; --line: #3a3a3c; --accent: #ff453a; --err: #ff6b6b; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 -apple-system, system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; }
+  label { display: block; font-weight: 600; margin: 14px 0 4px; }
+  .hint { font-weight: 400; color: var(--muted); font-size: 13px; }
+  input[type=text], input[type=password], input[type=url], select, textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: transparent; color: inherit; font: inherit;
+  }
+  textarea { min-height: 90px; resize: vertical; }
+  .count.over { color: var(--err); font-weight: 600; }
+  .row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .row label { display: inline; font-weight: 400; margin: 0; }
+  button { margin-top: 20px; padding: 10px 18px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--line); margin-left: 8px; }
+  pre { margin-top: 20px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  pre.error { border-color: var(--err); }
+</style>
+</head>
+<body>
+<main>
+  <h1>BTM Pizza test notification</h1>
+  <p class="sub">Sends through <code>POST /notifications/send</code>. Tick “Dry run” to preview the payload without sending.</p>
+
+  <form id="form">
+    <label for="key">Admin API key</label>
+    <input id="key" type="password" autocomplete="off" required>
+
+    <label for="type">Type</label>
+    <select id="type">
+      <option value="OFFER">OFFER: discounts, combos, deals</option>
+      <option value="WALLET_UPDATE">WALLET_UPDATE: coins, balance, tiers</option>
+      <option value="PIZZA_NEWS">PIZZA_NEWS: menu, outlets, events</option>
+    </select>
+
+    <label for="title">Title <span class="hint count" data-for="title" data-max="50"></span></label>
+    <input id="title" type="text" required>
+
+    <label for="body">Body <span class="hint count" data-for="body" data-max="150"></span></label>
+    <input id="body" type="text" required>
+
+    <label for="kicker">Kicker <span class="hint">(optional)</span> <span class="hint count" data-for="kicker" data-max="25"></span></label>
+    <input id="kicker" type="text">
+
+    <label for="image_url">Image URL <span class="hint">(optional, https JPEG/PNG, 16:9, under 500 KB)</span></label>
+    <input id="image_url" type="url" placeholder="https://s3.flavourslane.com/notificationimages/banner.jpeg">
+
+    <label for="article">Article <span class="hint">(optional, one paragraph per line)</span></label>
+    <textarea id="article"></textarea>
+
+    <label>Target</label>
+    <div class="row">
+      <label><input type="radio" name="target" value="users" checked> User IDs</label>
+      <label><input type="radio" name="target" value="all"> All devices</label>
+    </div>
+    <input id="user_ids" type="text" placeholder="user-123, user-456" style="margin-top:8px">
+
+    <div class="row">
+      <label><input id="dry_run" type="checkbox" checked> Dry run (don’t send)</label>
+    </div>
+
+    <button type="submit">Send</button><button type="button" class="secondary" id="fill">Fill sample for type</button>
+  </form>
+
+  <pre id="out" hidden></pre>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let samples = {};
+
+  try { $('key').value = sessionStorage.getItem('adminKey') || ''; } catch {}
+
+  const graphemes = (s) => [...new Intl.Segmenter().segment(s)].length;
+  function updateCounts() {
+    document.querySelectorAll('.count').forEach((el) => {
+      const n = graphemes($(el.dataset.for).value);
+      el.textContent = `${n}/${el.dataset.max}`;
+      el.classList.toggle('over', n > Number(el.dataset.max));
+    });
+  }
+  ['title', 'body', 'kicker'].forEach((id) => $(id).addEventListener('input', updateCounts));
+
+  function fillSample() {
+    const s = samples[$('type').value];
+    if (!s) return;
+    $('title').value = s.title;
+    $('body').value = s.body;
+    $('kicker').value = s.kicker || '';
+    $('article').value = (s.article || []).join('\n');
+    updateCounts();
+  }
+  $('fill').addEventListener('click', fillSample);
+  $('type').addEventListener('change', fillSample);
+  fetch('/admin/samples').then((r) => r.json()).then((s) => { samples = s; fillSample(); });
+
+  $('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const key = $('key').value.trim();
+    try { sessionStorage.setItem('adminKey', key); } catch {}
+
+    const body = { type: $('type').value, title: $('title').value, body: $('body').value };
+    if ($('kicker').value.trim()) body.kicker = $('kicker').value.trim();
+    if ($('image_url').value.trim()) body.image_url = $('image_url').value.trim();
+    const article = $('article').value.split('\n').map((p) => p.trim()).filter(Boolean);
+    if (article.length) body.article = article;
+    const all = document.querySelector('input[name=target]:checked').value === 'all';
+    body.target = all ? { all: true } : { user_ids: $('user_ids').value.split(',').map((u) => u.trim()).filter(Boolean) };
+    body.dry_run = $('dry_run').checked;
+
+    const out = $('out');
+    out.hidden = false;
+    out.className = '';
+    out.textContent = 'Sending…';
+    try {
+      const res = await fetch('/notifications/send', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      out.className = res.ok ? '' : 'error';
+      out.textContent = `HTTP ${res.status}\n` + JSON.stringify(json, null, 2);
+    } catch (err) {
+      out.className = 'error';
+      out.textContent = String(err);
+    }
+  });
+</script>
+</body>
+</html>

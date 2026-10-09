@@ -1,0 +1,43 @@
+Build the push notification sender for the BTM Pizza iOS app (bundle id `com.nayakkarthik.BTMPizza`) using Apple Push Notification service (APNs). Every notification must use this exact JSON payload shape:
+
+{
+  "aps": {
+    "alert": {
+      "title": "Two mediums for ₹599",
+      "body": "Today only at BTM Layout · earns double Dough Coins."
+    },
+    "sound": "notification_chime.caf",
+    "thread-id": "OFFER"
+  },
+  "type": "OFFER",
+  "notification_id": "6f1c2a9e-1b7d-4c1e-9a55-2f3d8c0e7b41",
+  "kicker": "Weekend offer",
+  "image_url": "https://s3.flavourslane.com/notificationimages/banner.jpeg",
+  "article": [
+    "First paragraph shown in the in-app popup.",
+    "Second paragraph."
+  ]
+}
+
+Field rules
+- `type` (required, top level, not inside `aps`): exactly one of `OFFER`, `WALLET_UPDATE`, `PIZZA_NEWS`, in uppercase. It picks the icon and colour in the app. Any other value shows as a generic bell, so validate it before sending.
+  - `OFFER`: discounts, combos, limited-time deals, double-coin promos.
+  - `WALLET_UPDATE`: coins earned or redeemed, balance changes, tier progress, referral rewards.
+  - `PIZZA_NEWS`: new menu items, outlet news, events, general announcements.
+- `aps.alert.title` (required): at most 50 characters. It's shown on the banner and as the card headline.
+- `aps.alert.body` (required): at most 150 characters. It's the one-line preview on the banner and the card.
+- `aps.sound` (required): always `"notification_chime.caf"`, the BTM Pizza chime bundled in the app. Spell it exactly, including `.caf`; if the name doesn't match, iOS plays its default sound instead.
+- `aps.thread-id`: set it to the same value as `type`, so iOS groups notifications by category.
+- `notification_id` (required): a unique UUID per notification, for de-duplication and analytics.
+- `kicker` (optional): a short label above the headline in the popup, at most 25 characters. If it's missing, the app uses "Offer", "Wallet update" or "Pizza news".
+- `article` (optional): an array of paragraph strings shown in the popup. If it's missing, the app shows `body`.
+- `image_url` (optional): an absolute https URL to a JPEG or PNG shown across the top of the in-app popup. The app downloads it every time the popup opens and never saves it on the phone, so host it on a fast, publicly readable URL (S3/CDN) that stays live as long as the notification might be opened. Use a 16:9 image, about 1600x900 and under 500 KB; other shapes get cropped to fill. Percent-encode spaces and special characters (e.g. `%20`). If it's missing or fails to load, the app shows its own drawn header instead.
+- Don't use `aps.category`. Apple reserves it for notifications with action buttons.
+- Keep the whole payload under APNs' 4 KB limit.
+
+What to build
+1. An endpoint for the app to register a device token: `POST /devices` with `{ "device_token": "...", "platform": "ios", "user_id": "..." }`. Store one token per device and replace it when it changes.
+2. A send API, `POST /notifications/send`, that accepts `{ type, title, body, kicker?, article?, image_url?, target }`. `target` is either `{ "user_ids": [...] }` or `{ "all": true }`. The API validates the fields above (for `image_url`: https only, and a HEAD request returns 200 with an image content type), builds the payload and sends it through APNs over HTTP/2 with token-based (.p8) authentication, `apns-push-type: alert` and `apns-topic: com.nayakkarthik.BTMPizza`. Use the sandbox APNs host for development builds and the production host for release builds.
+3. When APNs responds with `410 Unregistered` or `400 BadDeviceToken`, delete that token.
+4. Log each send with `notification_id`, `type`, the target count, and the success and failure counts.
+5. Add a small admin form or CLI to send a test notification of each `type`.

@@ -1,0 +1,10 @@
+bin/
+obj/
+data/
+*.user
+.vs/
+.idea/
+# Real credentials and APNs keys never go in git
+config/credentials.json
+config/*.p8
+.DS_Store
