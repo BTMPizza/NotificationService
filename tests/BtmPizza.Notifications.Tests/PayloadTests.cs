@@ -38,7 +38,7 @@ public class PayloadTests
     }
 
     private const string SpecExample = """
-        {"aps":{"alert":{"title":"Two mediums for ₹599","body":"Today only at BTM Layout · earns double Dough Coins."},"sound":"notification_chime.caf","thread-id":"OFFER"},"type":"OFFER","notification_id":"6f1c2a9e-1b7d-4c1e-9a55-2f3d8c0e7b41","kicker":"Weekend offer","image_url":"https://s3.flavourslane.com/notificationimages/banner.jpeg","article":["First paragraph shown in the in-app popup.","Second paragraph."]}
+        {"aps":{"alert":{"title":"Two mediums for ₹599","body":"Today only at BTM Layout · earns double Dough Coins."},"thread-id":"OFFER"},"type":"OFFER","notification_id":"6f1c2a9e-1b7d-4c1e-9a55-2f3d8c0e7b41","kicker":"Weekend offer","image_url":"https://s3.flavourslane.com/notificationimages/banner.jpeg","article":["First paragraph shown in the in-app popup.","Second paragraph."]}
         """;
 
     [Fact]
@@ -128,9 +128,9 @@ public class PayloadTests
 
         var broken = (JsonObject)spec.DeepClone();
         broken["aps"]!["category"] = "X";
-        broken["aps"]!["sound"] = "notification_chime";
+        broken["aps"]!["sound"] = "notification_chime.caf";
         broken["type"] = "offer";
-        Assert.Equal(4, IosContract.Check(broken).Count); // category, sound, type, thread-id != type
+        Assert.Equal(3, IosContract.Check(broken).Count); // aps keys (category, sound), type, thread-id != type
 
         var wrongThread = (JsonObject)spec.DeepClone();
         wrongThread["aps"]!["thread-id"] = "PIZZA_NEWS";

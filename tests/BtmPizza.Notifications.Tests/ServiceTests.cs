@@ -186,7 +186,7 @@ public sealed class ServiceTests(ServiceFixture fx) : IClassFixture<ServiceFixtu
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.True(json!["dry_run"]!.GetValue<bool>());
         Assert.Equal(1, json["target_count"]!.GetValue<int>());
-        Assert.Equal("notification_chime.caf", json["payload"]!["aps"]!["sound"]!.GetValue<string>());
+        Assert.Null(json["payload"]!["aps"]!["sound"]);
         Assert.Equal(before, fx.Received.Count);
         Assert.DoesNotContain(fx.NotificationLog.Written, w => w.Payload["notification_id"]!.GetValue<string>() == json["notification_id"]!.GetValue<string>());
     }

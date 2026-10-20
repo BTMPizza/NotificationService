@@ -177,7 +177,6 @@ public static partial class SendRequestValidator
 
 public static class PayloadBuilder
 {
-    public const string Sound = "notification_chime.caf";
     public const int MaxPayloadBytes = 4096;
 
     /// <summary>Builds the APNs payload in the exact shape (and key order) the app expects.</summary>
@@ -188,7 +187,6 @@ public static class PayloadBuilder
             ["aps"] = new JsonObject
             {
                 ["alert"] = new JsonObject { ["title"] = req.Title, ["body"] = req.Body },
-                ["sound"] = Sound,
                 ["thread-id"] = req.Type,
             },
             ["type"] = req.Type,
@@ -234,13 +232,13 @@ public static partial class IosContract
             problems.Add($"top-level keys must be aps, type, notification_id [+ kicker, image_url, article]; got {string.Join(",", payload.Select(kv => kv.Key))}");
 
         var aps = payload["aps"] as JsonObject;
-        if (aps is null || !SameKeys(aps, ["alert", "sound", "thread-id"]))
-            problems.Add("aps must contain exactly alert, sound, thread-id (no category)");
+        // No sound: the app decides how notifications sound.
+        if (aps is null || !SameKeys(aps, ["alert", "thread-id"]))
+            problems.Add("aps must contain exactly alert and thread-id (no sound, no category)");
         if (aps is not null)
         {
             var alert = aps["alert"] as JsonObject;
             if (alert is null || !SameKeys(alert, ["title", "body"])) problems.Add("aps.alert must contain exactly title and body");
-            if (Str(aps["sound"]) != PayloadBuilder.Sound) problems.Add($"aps.sound must be \"{PayloadBuilder.Sound}\"");
             if (Str(aps["thread-id"]) != Str(payload["type"])) problems.Add("aps.thread-id must equal type");
             if (!TextOk(alert?["title"], SendRequestValidator.TitleMax)) problems.Add("aps.alert.title must be 1-50 characters");
             if (!TextOk(alert?["body"], SendRequestValidator.BodyMax)) problems.Add("aps.alert.body must be 1-150 characters");
