@@ -11,12 +11,27 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using BtmPizza.Notifications.Data;
 
 namespace BtmPizza.Notifications.Tests;
 
 public sealed record ReceivedPush(string Host, IHeaderDictionary Headers, JsonObject Body, string DeviceToken);
+
+/// <summary>Stands in for MongoDB so the tests need no database.</summary>
+public sealed class RecordingNotificationLog : INotificationLog
+{
+    public readonly ConcurrentQueue<(DateTime SentAtUtc, JsonObject Payload)> Written = new();
+
+    public Task WriteAsync(DateTime sentAtUtc, JsonObject payload, CancellationToken ct = default)
+    {
+        Written.Enqueue((sentAtUtc, payload));
+        return Task.CompletedTask;
+    }
+}
 
 /// <summary>
 /// Runs the real API against two fake APNs servers (sandbox and production) speaking HTTP/2.
@@ -27,6 +42,7 @@ public sealed class ServiceFixture : IAsyncLifetime
     public const string AdminKey = "test-admin-key";
     public readonly ECDsa SigningKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     public readonly ConcurrentQueue<ReceivedPush> Received = new();
+    public readonly RecordingNotificationLog NotificationLog = new();
     public string DbPath => Path.Combine(_dir, "test.db");
     public HttpClient Client { get; private set; } = null!;
 
@@ -74,14 +90,15 @@ public sealed class ServiceFixture : IAsyncLifetime
         }));
 
         // Added after appsettings.json so these win (UseSetting would be overridden by it).
-        _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b => b.ConfigureAppConfiguration(c =>
-            c.AddInMemoryCollection(new Dictionary<string, string?>
+        _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(b => b
+            .ConfigureAppConfiguration(c => c.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["CredentialsPath"] = credentialsPath,
                 ["DbPath"] = DbPath,
                 ["Apns:SandboxUrl"] = _sandbox.Urls.First(),
                 ["Apns:ProductionUrl"] = _production.Urls.First(),
-            })));
+            }))
+            .ConfigureTestServices(s => s.AddSingleton<INotificationLog>(NotificationLog)));
         Client = _factory.CreateClient();
     }
 
@@ -171,6 +188,7 @@ public sealed class ServiceTests(ServiceFixture fx) : IClassFixture<ServiceFixtu
         Assert.Equal(1, json["target_count"]!.GetValue<int>());
         Assert.Equal("notification_chime.caf", json["payload"]!["aps"]!["sound"]!.GetValue<string>());
         Assert.Equal(before, fx.Received.Count);
+        Assert.DoesNotContain(fx.NotificationLog.Written, w => w.Payload["notification_id"]!.GetValue<string>() == json["notification_id"]!.GetValue<string>());
     }
 
     [Fact]
@@ -225,6 +243,19 @@ public sealed class ServiceTests(ServiceFixture fx) : IClassFixture<ServiceFixtu
         Assert.Equal("COINS_EARNED", Scalar($"SELECT type FROM notification_log WHERE notification_id = '{notificationId}'"));
         Assert.Equal(1L, Scalar($"SELECT success_count FROM notification_log WHERE notification_id = '{notificationId}'"));
         Assert.Equal(3L, Scalar($"SELECT failure_count FROM notification_log WHERE notification_id = '{notificationId}'"));
+
+        // The delivered payload goes to the MongoDB log once, keyed by the UTC send time.
+        var logged = Assert.Single(fx.NotificationLog.Written, w => w.Payload["notification_id"]!.GetValue<string>() == notificationId);
+        Assert.Equal(DateTimeKind.Utc, logged.SentAtUtc.Kind);
+        Assert.Equal(received[0].Body.ToJsonString(), logged.Payload.ToJsonString());
+    }
+
+    [Fact]
+    public void Notification_log_keys_sort_chronologically()
+    {
+        var t = new DateTime(2026, 10, 20, 9, 5, 3, DateTimeKind.Utc).AddTicks(1234567);
+        Assert.Equal("2026-10-20T09:05:03.1234567Z", MongoNotificationLog.Key(t));
+        Assert.True(string.CompareOrdinal(MongoNotificationLog.Key(t), MongoNotificationLog.Key(t.AddTicks(1))) < 0);
     }
 
     private static List<string> IosContractProblems(JsonObject body) => Payload.IosContract.Check(body);

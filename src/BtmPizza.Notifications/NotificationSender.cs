@@ -27,6 +27,7 @@ public sealed class NotificationSender(
     DeviceStore store,
     IApnsClient apns,
     IImageUrlVerifier imageVerifier,
+    INotificationLog notificationLog,
     ILogger<NotificationSender> logger)
 {
     private const int Concurrency = 100;
@@ -55,6 +56,7 @@ public sealed class NotificationSender(
         var removed = 0;
         var failureReasons = new ConcurrentDictionary<string, int>();
         var body = PayloadJson.Serialize(payload);
+        var sentAt = DateTime.UtcNow;
 
         await Parallel.ForEachAsync(devices, new ParallelOptions { MaxDegreeOfParallelism = Concurrency, CancellationToken = ct },
             async (device, token) =>
@@ -83,8 +85,22 @@ public sealed class NotificationSender(
                 failure_reasons = failureReasons,
             }));
         store.InsertSendLog(new SendLogEntry(notificationId, req.Type, devices.Count, success, failure, removed, body));
+        await WriteNotificationLogAsync(sentAt, notificationId, payload);
 
         return new SendResult(notificationId, false, req.Type, devices.Count, success, failure, removed,
             new Dictionary<string, int>(failureReasons), payload, warnings);
+    }
+
+    // The notification has already gone out, so a MongoDB outage is logged rather than failing the send.
+    private async Task WriteNotificationLogAsync(DateTime sentAt, string notificationId, JsonObject payload)
+    {
+        try
+        {
+            await notificationLog.WriteAsync(sentAt, payload);
+        }
+        catch (Exception e)
+        {
+            logger.LogError(e, "Could not write notification {NotificationId} to MongoDB", notificationId);
+        }
     }
 }
