@@ -14,8 +14,9 @@ data/notifications.db              SQLite: devices and send log (created on firs
 1. `cp config/credentials.example.json config/credentials.json`
 2. Set `admin_api_key` to a long random string. Callers of the send API need it.
 3. Set `rabbitmq.url`, e.g. `amqp://user:pass@localhost:5672/`. Percent-encode special characters in the password, e.g. `@` becomes `%40`.
-4. Once you have the Apple credentials, fill in `apns.team_id` and `apns.key_id`, and put the `.p8` file at `apns.private_key_path`. `config/*.p8` is gitignored.
-5. Start the service with `dotnet run --project src/BtmPizza.Notifications`. It runs on `http://localhost:3000`.
+4. Set `mongodb.url`, e.g. `mongodb://192.168.1.24:27017/btm_notifications`. The path is the database name. Leave it out to skip the MongoDB log.
+5. Once you have the Apple credentials, fill in `apns.team_id` and `apns.key_id`, and put the `.p8` file at `apns.private_key_path`. `config/*.p8` is gitignored.
+6. Start the service with `dotnet run --project src/BtmPizza.Notifications`. It runs on `http://localhost:3000`.
 
 While the APNs values are still placeholders, the service starts and device registration works. Real sends are refused with `503`, and dry runs (`"dry_run": true`) still return the built payload.
 
@@ -49,6 +50,20 @@ To use a credentials file somewhere else, set `CredentialsPath`. To move the dat
 - Every built payload is also checked against the iOS contract before it is sent.
 - Tokens that get `410` or `400 BadDeviceToken` from APNs are deleted.
 - Each send is logged and stored in the `notification_log` table.
+- Each sent notification is also written to MongoDB (see below).
+
+## MongoDB log
+
+After every real send (not dry runs), the service appends one document to the `notification_log` collection in the database named in `mongodb.url`:
+
+```json
+{ "_id": "2026-10-20T04:32:54.6058760Z", "value": { "aps": { ... }, "type": "OFFER", "notification_id": "...", ... } }
+```
+
+- `_id` is the UTC send time with 100 ns precision. It's a fixed-width string, so sorting by `_id` sorts by time. If two sends share a tick, the later one moves forward by one tick.
+- `value` is the exact payload delivered to APNs.
+- The service only inserts. It never updates or deletes, and nothing else writes to the collection.
+- If MongoDB is down, the send still succeeds and the error is logged. Writes give up after about 3 seconds.
 
 ## RabbitMQ
 

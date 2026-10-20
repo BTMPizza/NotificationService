@@ -21,7 +21,7 @@ public sealed record ApnsCredentials(
     public bool Configured => Problems.Count == 0;
 }
 
-public sealed record Credentials(string AdminApiKey, string? RabbitMqUrl, ApnsCredentials Apns, string RootDir);
+public sealed record Credentials(string AdminApiKey, string? RabbitMqUrl, string? MongoDbUrl, ApnsCredentials Apns, string RootDir);
 
 /// <summary>
 /// Loads config/credentials.json, which is kept out of git and out of appsettings.
@@ -80,10 +80,13 @@ public static partial class CredentialsLoader
 
         // Without a URL the service runs HTTP-only and doesn't consume from RabbitMQ.
         var rabbitUrl = IsPlaceholder(file.RabbitMq?.Url) ? null : file.RabbitMq!.Url;
+        // Without a URL sent notifications are only logged to the console and SQLite, not MongoDB.
+        var mongoUrl = IsPlaceholder(file.MongoDb?.Url) ? null : file.MongoDb!.Url;
 
         return new Credentials(
             file.AdminApiKey!,
             rabbitUrl,
+            mongoUrl,
             new ApnsCredentials(apns.TeamId, apns.KeyId, privateKey, defaultEnvironment, problems),
             rootDir);
     }
@@ -103,6 +106,7 @@ public static partial class CredentialsLoader
         [JsonPropertyName("apns")] public ApnsSection? Apns { get; set; }
         [JsonPropertyName("admin_api_key")] public string? AdminApiKey { get; set; }
         [JsonPropertyName("rabbitmq")] public RabbitMqSection? RabbitMq { get; set; }
+        [JsonPropertyName("mongodb")] public MongoDbSection? MongoDb { get; set; }
     }
 
     private sealed class ApnsSection
@@ -114,6 +118,11 @@ public static partial class CredentialsLoader
     }
 
     private sealed class RabbitMqSection
+    {
+        [JsonPropertyName("url")] public string? Url { get; set; }
+    }
+
+    private sealed class MongoDbSection
     {
         [JsonPropertyName("url")] public string? Url { get; set; }
     }

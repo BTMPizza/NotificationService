@@ -38,6 +38,17 @@ builder.Services.AddSingleton<IApnsClient>(sp =>
 });
 builder.Services.AddSingleton<IImageUrlVerifier>(_ => new ImageUrlVerifier(
     new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) }) { Timeout = TimeSpan.FromSeconds(5) }));
+builder.Services.AddSingleton<INotificationLog>(sp =>
+{
+    var url = sp.GetRequiredService<Credentials>().MongoDbUrl;
+    if (url is null)
+    {
+        sp.GetRequiredService<ILogger<MongoNotificationLog>>().LogWarning(
+            "mongodb.url not set in credentials.json; sent notifications are not written to MongoDB");
+        return new NoNotificationLog();
+    }
+    return new MongoNotificationLog(url);
+});
 builder.Services.AddSingleton<NotificationSender>();
 if (!isCli) builder.Services.AddHostedService<RabbitMqConsumer>();
 
@@ -46,6 +57,7 @@ var app = builder.Build();
 // Load credentials and open the database up front so misconfiguration fails at startup.
 app.Services.GetRequiredService<IApnsClient>();
 app.Services.GetRequiredService<DeviceStore>();
+app.Services.GetRequiredService<INotificationLog>();
 
 if (isCli)
 {
