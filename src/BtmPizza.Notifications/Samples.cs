@@ -49,16 +49,6 @@ public static class Samples
                 "You used 300 Dough Coins for ₹150 off your order.",
                 "Your remaining balance is 560 coins."),
         },
-        ["TIER_CHANGED"] = new JsonObject
-        {
-            ["type"] = "TIER_CHANGED",
-            ["title"] = "Welcome to Gold tier",
-            ["body"] = "You crossed 1,000 Dough Coins · enjoy 1.5x coins on every order.",
-            ["kicker"] = "Tier upgrade",
-            ["article"] = new JsonArray(
-                "Congratulations! You are now a Gold member.",
-                "Gold members earn 1.5x Dough Coins on every order and get early access to new pizzas."),
-        },
         ["CUSTOMER_REGISTERED"] = new JsonObject
         {
             ["type"] = "CUSTOMER_REGISTERED",

@@ -11,7 +11,7 @@ public static class NotificationTypes
 {
     public static readonly string[] All = [
         "OFFER", "PIZZA_NEWS",
-        "COINS_EARNED", "COINS_REDEEMED", "TIER_CHANGED", "CUSTOMER_REGISTERED", "REFERRAL_COMPLETED",
+        "COINS_EARNED", "COINS_REDEEMED", "CUSTOMER_REGISTERED", "REFERRAL_COMPLETED",
     ];
 }
 
