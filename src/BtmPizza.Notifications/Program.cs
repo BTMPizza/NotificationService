@@ -6,11 +6,15 @@ using BtmPizza.Notifications.Cli;
 using BtmPizza.Notifications.Configuration;
 using BtmPizza.Notifications.Data;
 using BtmPizza.Notifications.Messaging;
+using BtmPizza.Notifications.Observability;
 using BtmPizza.Notifications.Payload;
 
 // `dotnet run -- send-test ...` runs the test-send CLI instead of the web API.
 var isCli = args is ["send-test", ..];
 var builder = WebApplication.CreateBuilder(isCli ? [] : args);
+
+// Observability: logs -> Loki, traces -> Tempo, metrics -> Prometheus (OTLP; settings from OTEL_* env vars).
+if (!isCli) builder.AddBtmObservability();
 
 builder.Services.ConfigureHttpJsonOptions(o =>
 {
@@ -66,6 +70,8 @@ if (isCli)
     return exitCode;
 }
 
+// First: every log line for the request (including errors logged by UseApiErrors) carries btm_tid / client_type / customer_id.
+app.UseMiddleware<BtmTraceMiddleware>();
 app.UseApiErrors();
 app.MapNotificationEndpoints();
 app.Lifetime.ApplicationStarted.Register(() =>
