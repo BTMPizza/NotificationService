@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using BtmPizza.Notifications.Configuration;
+using BtmPizza.Notifications.Observability;
 using BtmPizza.Notifications.Payload;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
@@ -104,6 +105,11 @@ public sealed partial class RabbitMqConsumer(
 
     private async Task HandleMessageAsync(IChannel channel, BasicDeliverEventArgs ea, CancellationToken ct)
     {
+        // Each message is its own BTM transaction: publishers may set btm-tid / client-type / customer-id as message headers.
+        var trace = TraceFrom(ea.BasicProperties.Headers);
+        BtmTraceContext.Current = trace;
+        using var scope = logger.BeginScope(trace);
+
         var raw = Encoding.UTF8.GetString(ea.Body.Span);
         logger.LogDebug(
             "RabbitMQ message received (exchange={Exchange} routingKey={RoutingKey} redelivered={Redelivered}):\n{Body}",
@@ -136,5 +142,19 @@ public sealed partial class RabbitMqConsumer(
             logger.LogError("RabbitMQ message rejected and dead-lettered to {Queue}: {Reason}", DeadLetterQueue, reason);
             await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false, ct);
         }
+    }
+
+    private static BtmTraceContext TraceFrom(IDictionary<string, object?>? headers)
+    {
+        var http = new HeaderDictionary();
+        if (headers is not null)
+        {
+            foreach (var name in new[] { BtmTraceContext.TidHeader, BtmTraceContext.TidHeaderUnderscore, BtmTraceContext.ClientTypeHeader, BtmTraceContext.CustomerIdHeader })
+            {
+                if (headers.TryGetValue(name, out var value))
+                    http[name] = value switch { byte[] bytes => Encoding.UTF8.GetString(bytes), _ => value?.ToString() };
+            }
+        }
+        return BtmTraceContext.FromHeaders(http, trustCustomerId: true);
     }
 }
