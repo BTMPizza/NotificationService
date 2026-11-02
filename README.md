@@ -36,6 +36,19 @@ To use a credentials file somewhere else, set `CredentialsPath`. To move the dat
 - `environment`: `sandbox` for development builds, `production` for TestFlight and App Store builds. It defaults to `apns.default_environment`. Each token is sent to the matching APNs host. This matters because a sandbox token sent to the production host comes back as `BadDeviceToken`, and the service then deletes that token.
 - `device_id`: lets the service replace a device's old token when it changes. Without it, the token itself identifies the device.
 
+### Admin app endpoints, through the gateway (OWNER only)
+
+The BTM Pizza Admin app calls these at `/notificationservice/api/admin/notifications/...`. The gateway lets only
+`OWNER` tokens through and sets `customer-id` and `X-User-Role`; the service checks both again (401 / 403). No admin
+API key is involved.
+
+- `POST /api/admin/notifications/send`: the same body and result as `POST /notifications/send` below.
+- `GET /api/admin/notifications?page=&page_size=&user_id=`: the send log, newest first (`page_size` ≤ 100). With
+  `user_id`, only sends that reached that customer (sends to everyone, or lists naming them). Items:
+  `{notification_id, type, title, body, image_url, target: {all, user_ids}, target_count, success_count, failure_count, sent_at}`.
+  Sends logged before this was added have `null` title, body, image and target.
+- `GET /api/admin/notifications/audience`: `{customers, devices}` that can receive pushes now.
+
 ### `POST /notifications/send`, needs `Authorization: Bearer <admin_api_key>`
 
 ```json

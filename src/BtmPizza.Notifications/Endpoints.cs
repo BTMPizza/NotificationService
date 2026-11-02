@@ -130,8 +130,66 @@ public static partial class Endpoints
         return new DeviceRegistration(token, "ios", customerId!, environment!, DeviceId: null, bundleId, appVersion);
     }
 
+    /// <summary>Header the gateway sets with the caller's AuthService role (client-supplied values are stripped there).</summary>
+    public const string UserRoleHeader = "X-User-Role";
+
+    /// <summary>
+    /// Admin-app endpoints are routed by the gateway for OWNER tokens only; this re-checks the identity it forwards.
+    /// </summary>
+    private static void RequireOwner(HttpContext ctx)
+    {
+        CallerCustomerId(ctx);
+        if (ctx.Request.Headers[UserRoleHeader].ToString().Trim() != "OWNER")
+            throw new HttpError(403, "only BTM Pizza owners can use the admin API");
+    }
+
+    private static int QueryInt(HttpContext ctx, string name, int fallback, int min, int max)
+    {
+        var raw = ctx.Request.Query[name].ToString();
+        if (raw.Length == 0) return fallback;
+        return int.TryParse(raw, out var value) && value >= min && value <= max
+            ? value
+            : throw new ValidationException($"{name} must be a whole number from {min} to {max}");
+    }
+
     public static void MapNotificationEndpoints(this WebApplication app)
     {
+        // ---- BTM Pizza Admin app, through the gateway (OWNER only) ----
+        app.MapPost("/api/admin/notifications/send", async (HttpContext ctx, NotificationSender sender) =>
+        {
+            RequireOwner(ctx);
+            var result = await sender.SendAsync(await ReadJsonAsync(ctx), ctx.RequestAborted);
+            app.Logger.LogInformation("Owner {CustomerId} sent notification {NotificationId} (dry run {DryRun})",
+                CallerCustomerId(ctx), result.NotificationId, result.DryRun);
+            return Results.Ok(result);
+        });
+
+        app.MapGet("/api/admin/notifications", (HttpContext ctx, DeviceStore store) =>
+        {
+            RequireOwner(ctx);
+            var page = QueryInt(ctx, "page", 1, 1, 100_000);
+            var pageSize = QueryInt(ctx, "page_size", 20, 1, 100);
+            var userId = ctx.Request.Query["user_id"].ToString().Trim() is { Length: > 0 } u ? u : null;
+            var (items, total) = store.ListSendLog(page, pageSize, userId);
+            return Results.Ok(new
+            {
+                items = items.Select(i => new
+                {
+                    notification_id = i.NotificationId, type = i.Type, title = i.Title, body = i.Body, image_url = i.ImageUrl,
+                    target = i.TargetAll is null ? null : new { all = i.TargetAll.Value, user_ids = i.TargetUserIds ?? [] },
+                    target_count = i.TargetCount, success_count = i.SuccessCount, failure_count = i.FailureCount, sent_at = i.SentAt,
+                }),
+                page, page_size = pageSize, total_count = total, has_more = (long)page * pageSize < total,
+            });
+        });
+
+        app.MapGet("/api/admin/notifications/audience", (HttpContext ctx, DeviceStore store) =>
+        {
+            RequireOwner(ctx);
+            var (customers, devices) = store.CountAudience();
+            return Results.Ok(new { customers, devices });
+        });
+
         app.MapGet("/health", (IApnsClient apns) => Results.Ok(new { ok = true, apns_configured = apns.IsConfigured }));
 
         app.MapGet("/admin", (IWebHostEnvironment env) =>
