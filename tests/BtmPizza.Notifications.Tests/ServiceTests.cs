@@ -142,6 +142,82 @@ public sealed class ServiceTests(ServiceFixture fx) : IClassFixture<ServiceFixtu
         return cmd.ExecuteScalar();
     }
 
+    private async Task<(HttpStatusCode Status, JsonNode? Json)> PostAsCustomer(string path, object body, string? customerId)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(body) };
+        if (customerId is not null) req.Headers.Add("customer-id", customerId);
+        var res = await fx.Client.SendAsync(req);
+        return (res.StatusCode, JsonNode.Parse(await res.Content.ReadAsStringAsync()));
+    }
+
+    private static Dictionary<string, string> AppRegistration(string customerId, string token, string environment = "sandbox") => new()
+    {
+        ["customerId"] = customerId, ["deviceToken"] = token, ["platform"] = "ios",
+        ["apnsEnvironment"] = environment, ["bundleId"] = "com.nayakkarthik.BTMPizza", ["appVersion"] = "1.0",
+    };
+
+    [Fact]
+    public async Task App_registration_stores_the_device_for_the_signed_in_customer()
+    {
+        var (status, json) = await PostAsCustomer("/api/devices/register", AppRegistration("c1", Token("d1"), "production"), "c1");
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal("production", json!["environment"]!.GetValue<string>());
+        Assert.Equal("c1", Scalar($"SELECT user_id FROM devices WHERE device_token = '{Token("d1")}'"));
+        Assert.Equal("com.nayakkarthik.BTMPizza", Scalar($"SELECT bundle_id FROM devices WHERE device_token = '{Token("d1")}'"));
+        Assert.Equal("1.0", Scalar($"SELECT app_version FROM devices WHERE device_token = '{Token("d1")}'"));
+
+        // Same phone, another customer signs in: the token moves to them.
+        await PostAsCustomer("/api/devices/register", AppRegistration("c2", Token("d1")), "c2");
+        Assert.Equal("c2", Scalar($"SELECT user_id FROM devices WHERE device_token = '{Token("d1")}'"));
+        Assert.Equal(1L, Scalar($"SELECT COUNT(*) FROM devices WHERE device_token = '{Token("d1")}'"));
+    }
+
+    [Fact]
+    public async Task App_registration_requires_the_gateway_customer_and_a_matching_customerId()
+    {
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await PostAsCustomer("/api/devices/register", AppRegistration("c3", Token("d3")), customerId: null)).Status);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await PostAsCustomer("/api/devices/register", AppRegistration("someone-else", Token("d3")), "c3")).Status);
+        Assert.Equal(0L, Scalar($"SELECT COUNT(*) FROM devices WHERE device_token = '{Token("d3")}'"));
+    }
+
+    [Fact]
+    public async Task App_registration_validates_fields()
+    {
+        var body = AppRegistration("c4", "not-hex", "staging");
+        body["platform"] = "android";
+        body["bundleId"] = "";
+        var (status, json) = await PostAsCustomer("/api/devices/register", body, "c4");
+
+        Assert.Equal((HttpStatusCode)422, status);
+        var details = json!["details"]!.AsArray().Select(d => d!.GetValue<string>()).ToList();
+        Assert.Contains(details, d => d.StartsWith("deviceToken"));
+        Assert.Contains(details, d => d.StartsWith("platform"));
+        Assert.Contains(details, d => d.StartsWith("apnsEnvironment"));
+        Assert.Contains(details, d => d.StartsWith("bundleId"));
+    }
+
+    [Fact]
+    public async Task Unregister_removes_only_the_callers_token()
+    {
+        await PostAsCustomer("/api/devices/register", AppRegistration("c5", Token("d5")), "c5");
+
+        var (other, otherJson) = await PostAsCustomer("/api/devices/unregister", new { deviceToken = Token("d5") }, "c6");
+        Assert.Equal(HttpStatusCode.OK, other);
+        Assert.Equal(0, otherJson!["removed"]!.GetValue<int>());
+        Assert.Equal(1L, Scalar($"SELECT COUNT(*) FROM devices WHERE device_token = '{Token("d5")}'"));
+
+        var (own, ownJson) = await PostAsCustomer("/api/devices/unregister", new { deviceToken = Token("d5") }, "c5");
+        Assert.Equal(HttpStatusCode.OK, own);
+        Assert.Equal(1, ownJson!["removed"]!.GetValue<int>());
+        Assert.Equal(0L, Scalar($"SELECT COUNT(*) FROM devices WHERE device_token = '{Token("d5")}'"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await PostAsCustomer("/api/devices/unregister", new { deviceToken = Token("d5") }, customerId: null)).Status);
+    }
+
     [Fact]
     public async Task Device_registration_validates_and_stores_one_token_per_device()
     {

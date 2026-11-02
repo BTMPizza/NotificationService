@@ -3,7 +3,9 @@ using Microsoft.Data.Sqlite;
 
 namespace BtmPizza.Notifications.Data;
 
-public sealed record DeviceRegistration(string DeviceToken, string Platform, string UserId, string Environment, string? DeviceId);
+public sealed record DeviceRegistration(
+    string DeviceToken, string Platform, string UserId, string Environment, string? DeviceId,
+    string? BundleId = null, string? AppVersion = null);
 
 public sealed record Device(string DeviceToken, string UserId, string Environment, string UpdatedAt);
 
@@ -48,6 +50,15 @@ public sealed class DeviceStore
               sent_at         TEXT NOT NULL DEFAULT (datetime('now'))
             );
             """);
+
+        // Added with the app's /api/devices/register call; older databases get the columns here.
+        foreach (var column in new[] { "bundle_id", "app_version" })
+        {
+            using var check = conn.CreateCommand();
+            check.CommandText = "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name = $name";
+            check.Parameters.AddWithValue("$name", column);
+            if ((long)check.ExecuteScalar()! == 0) Execute(conn, $"ALTER TABLE devices ADD COLUMN {column} TEXT");
+        }
     }
 
     private SqliteConnection Open()
@@ -84,30 +95,35 @@ public sealed class DeviceStore
             {
                 ("$deviceId", d.DeviceId), ("$token", d.DeviceToken), ("$platform", d.Platform),
                 ("$userId", d.UserId), ("$env", d.Environment),
+                ("$bundleId", d.BundleId), ("$appVersion", d.AppVersion),
             };
             if (d.DeviceId is not null)
             {
                 Execute(conn, tx, "DELETE FROM devices WHERE device_token = $token AND (device_id IS NULL OR device_id != $deviceId)", args);
                 Execute(conn, tx, """
-                    INSERT INTO devices (device_id, device_token, platform, user_id, environment)
-                    VALUES ($deviceId, $token, $platform, $userId, $env)
+                    INSERT INTO devices (device_id, device_token, platform, user_id, environment, bundle_id, app_version)
+                    VALUES ($deviceId, $token, $platform, $userId, $env, $bundleId, $appVersion)
                     ON CONFLICT(device_id) DO UPDATE SET
                       device_token = excluded.device_token,
                       platform     = excluded.platform,
                       user_id      = excluded.user_id,
                       environment  = excluded.environment,
+                      bundle_id    = excluded.bundle_id,
+                      app_version  = excluded.app_version,
                       updated_at   = datetime('now')
                     """, args);
             }
             else
             {
                 Execute(conn, tx, """
-                    INSERT INTO devices (device_token, platform, user_id, environment)
-                    VALUES ($token, $platform, $userId, $env)
+                    INSERT INTO devices (device_token, platform, user_id, environment, bundle_id, app_version)
+                    VALUES ($token, $platform, $userId, $env, $bundleId, $appVersion)
                     ON CONFLICT(device_token) DO UPDATE SET
                       platform    = excluded.platform,
                       user_id     = excluded.user_id,
                       environment = excluded.environment,
+                      bundle_id   = excluded.bundle_id,
+                      app_version = excluded.app_version,
                       updated_at  = datetime('now')
                     """, args);
             }
@@ -144,6 +160,14 @@ public sealed class DeviceStore
         using var reader = cmd.ExecuteReader();
         while (reader.Read()) devices.Add(new TargetDevice(reader.GetString(0), reader.GetString(1)));
         return devices;
+    }
+
+    /// <summary>Removes a token only if it belongs to <paramref name="userId"/> (logout).</summary>
+    public int DeleteToken(string deviceToken, string userId)
+    {
+        using var conn = Open();
+        return Execute(conn, "DELETE FROM devices WHERE device_token = $token AND user_id = $userId",
+            ("$token", deviceToken), ("$userId", userId));
     }
 
     public int DeleteToken(string deviceToken)

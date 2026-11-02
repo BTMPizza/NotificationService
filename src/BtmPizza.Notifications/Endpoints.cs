@@ -90,6 +90,46 @@ public static partial class Endpoints
         return new DeviceRegistration(token, "ios", userId!, environment!, deviceId);
     }
 
+    /// <summary>Header the gateway sets from the verified bearer token (client-supplied values are stripped there).</summary>
+    public const string CustomerIdHeader = "customer-id";
+
+    private static string CallerCustomerId(HttpContext ctx) =>
+        ctx.Request.Headers[CustomerIdHeader].ToString().Trim() is { Length: > 0 } id
+            ? id
+            : throw new HttpError(401, "not signed in: call this through the gateway with a bearer token");
+
+    private static string? JsonStr(JsonObject? obj, string key) =>
+        obj?[key]?.GetValueKind() == JsonValueKind.String ? obj[key]!.GetValue<string>().Trim() : null;
+
+    private static string ParseToken(JsonObject? obj, string key, List<string> errors)
+    {
+        var token = (JsonStr(obj, key) ?? "").ToLowerInvariant();
+        if (!HexToken().IsMatch(token)) errors.Add($"{key} must be the hex APNs device token");
+        return token;
+    }
+
+    /// <summary>Body of POST /api/devices/register, sent by the iOS app after sign-in.</summary>
+    private static DeviceRegistration ParseAppRegistration(JsonNode? body, string callerCustomerId)
+    {
+        var errors = new List<string>();
+        if (body is not JsonObject obj) throw new ValidationException("request body must be a JSON object");
+
+        var customerId = JsonStr(obj, "customerId");
+        if (string.IsNullOrEmpty(customerId)) errors.Add("customerId is required");
+        else if (customerId != callerCustomerId) throw new HttpError(403, "customerId does not match the signed-in customer");
+        var token = ParseToken(obj, "deviceToken", errors);
+        if (JsonStr(obj, "platform") != "ios") errors.Add("platform must be \"ios\"");
+        var environment = JsonStr(obj, "apnsEnvironment");
+        if (environment is null || !ApnsEnvironments.All.Contains(environment))
+            errors.Add($"apnsEnvironment must be one of {string.Join(", ", ApnsEnvironments.All)}");
+        var bundleId = JsonStr(obj, "bundleId");
+        if (string.IsNullOrEmpty(bundleId)) errors.Add("bundleId is required");
+        var appVersion = JsonStr(obj, "appVersion");
+
+        if (errors.Count > 0) throw new ValidationException(errors);
+        return new DeviceRegistration(token, "ios", customerId!, environment!, DeviceId: null, bundleId, appVersion);
+    }
+
     public static void MapNotificationEndpoints(this WebApplication app)
     {
         app.MapGet("/health", (IApnsClient apns) => Results.Ok(new { ok = true, apns_configured = apns.IsConfigured }));
@@ -105,6 +145,30 @@ public static partial class Endpoints
             var device = ParseDeviceRegistration(await ReadJsonAsync(ctx), credentials.Apns.DefaultEnvironment);
             var row = store.Upsert(device);
             return Results.Ok(new { device_token = row.DeviceToken, user_id = row.UserId, environment = row.Environment, updated_at = row.UpdatedAt });
+        });
+
+        // Called by the app through the gateway (protected routes), which sets customer-id from the bearer token.
+        app.MapPost("/api/devices/register", async (HttpContext ctx, DeviceStore store) =>
+        {
+            var customerId = CallerCustomerId(ctx);
+            var device = ParseAppRegistration(await ReadJsonAsync(ctx), customerId);
+            var row = store.Upsert(device);
+            app.Logger.LogInformation("Registered {Environment} device ...{TokenTail} for customer {CustomerId} ({BundleId} {AppVersion})",
+                row.Environment, row.DeviceToken[^8..], customerId, device.BundleId, device.AppVersion);
+            return Results.Ok(new { customer_id = row.UserId, environment = row.Environment, updated_at = row.UpdatedAt });
+        });
+
+        // Logout. Only removes the token if it belongs to the caller; unknown tokens are not an error.
+        app.MapPost("/api/devices/unregister", async (HttpContext ctx, DeviceStore store) =>
+        {
+            var customerId = CallerCustomerId(ctx);
+            var errors = new List<string>();
+            var token = ParseToken(await ReadJsonAsync(ctx) as JsonObject, "deviceToken", errors);
+            if (errors.Count > 0) throw new ValidationException(errors);
+            var removed = store.DeleteToken(token, customerId);
+            app.Logger.LogInformation("Unregistered device ...{TokenTail} for customer {CustomerId} (removed={Removed})",
+                token[^8..], customerId, removed);
+            return Results.Ok(new { removed });
         });
 
         app.MapPost("/notifications/send", async (HttpContext ctx, Credentials credentials, NotificationSender sender) =>
