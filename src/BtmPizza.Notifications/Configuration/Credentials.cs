@@ -21,7 +21,14 @@ public sealed record ApnsCredentials(
     public bool Configured => Problems.Count == 0;
 }
 
-public sealed record Credentials(string AdminApiKey, string? RabbitMqUrl, string? MongoDbUrl, ApnsCredentials Apns, string RootDir);
+/// <summary>
+/// Where the admin app's notification images go: an S3-compatible bucket (MinIO) that is publicly readable at
+/// <paramref name="PublicBaseUrl"/>. Null in <see cref="Credentials.ImageStorage"/> when not configured.
+/// </summary>
+public sealed record ImageStorageCredentials(string Endpoint, string AccessKey, string SecretKey, string Bucket, string PublicBaseUrl);
+
+public sealed record Credentials(string AdminApiKey, string? RabbitMqUrl, string? MongoDbUrl, ApnsCredentials Apns, string RootDir,
+    ImageStorageCredentials? ImageStorage = null);
 
 /// <summary>
 /// Loads config/credentials.json, which is kept out of git and out of appsettings.
@@ -88,7 +95,30 @@ public static partial class CredentialsLoader
             rabbitUrl,
             mongoUrl,
             new ApnsCredentials(apns.TeamId, apns.KeyId, privateKey, defaultEnvironment, problems),
-            rootDir);
+            rootDir,
+            LoadImageStorage(file.S3));
+    }
+
+    /// <summary>
+    /// The "s3" section, with S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY / S3_BUCKET / S3_PUBLIC_BASE_URL
+    /// environment variables taking precedence (so a k8s Secret can supply just the keys). Null when the endpoint
+    /// or either key is missing: image uploads are then refused with 503.
+    /// </summary>
+    private static ImageStorageCredentials? LoadImageStorage(S3Section? s3)
+    {
+        static string? Pick(string env, string? file) =>
+            Environment.GetEnvironmentVariable(env) is { Length: > 0 } v ? v : IsPlaceholder(file) ? null : file;
+
+        var endpoint = Pick("S3_ENDPOINT", s3?.Endpoint);
+        var accessKey = Pick("S3_ACCESS_KEY", s3?.AccessKey);
+        var secretKey = Pick("S3_SECRET_KEY", s3?.SecretKey);
+        if (endpoint is null || accessKey is null || secretKey is null) return null;
+
+        var bucket = Pick("S3_BUCKET", s3?.Bucket) ?? "notificationimages";
+        var publicBase = Pick("S3_PUBLIC_BASE_URL", s3?.PublicBaseUrl) ?? $"https://s3.flavourslane.com/{bucket}";
+        if (!Uri.TryCreate(publicBase, UriKind.Absolute, out var u) || u.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("s3.public_base_url must be an absolute https URL (the app only shows https images).");
+        return new ImageStorageCredentials(endpoint, accessKey, secretKey, bucket, publicBase.TrimEnd('/'));
     }
 
     private static string? FindUpwards(string startDir, string relativePath)
@@ -107,6 +137,16 @@ public static partial class CredentialsLoader
         [JsonPropertyName("admin_api_key")] public string? AdminApiKey { get; set; }
         [JsonPropertyName("rabbitmq")] public RabbitMqSection? RabbitMq { get; set; }
         [JsonPropertyName("mongodb")] public MongoDbSection? MongoDb { get; set; }
+        [JsonPropertyName("s3")] public S3Section? S3 { get; set; }
+    }
+
+    private sealed class S3Section
+    {
+        [JsonPropertyName("endpoint")] public string? Endpoint { get; set; }
+        [JsonPropertyName("access_key")] public string? AccessKey { get; set; }
+        [JsonPropertyName("secret_key")] public string? SecretKey { get; set; }
+        [JsonPropertyName("bucket")] public string? Bucket { get; set; }
+        [JsonPropertyName("public_base_url")] public string? PublicBaseUrl { get; set; }
     }
 
     private sealed class ApnsSection

@@ -48,6 +48,18 @@ API key is involved.
   `{notification_id, type, title, body, image_url, target: {all, user_ids}, target_count, success_count, failure_count, sent_at}`.
   Sends logged before this was added have `null` title, body, image and target.
 - `GET /api/admin/notifications/audience`: `{customers, devices}` that can receive pushes now.
+- `POST /api/admin/notifications/images`: upload a notification image. Send the file as the raw body (JPEG, PNG or GIF,
+  checked by its bytes; at most 5 MB). It's stored in the bucket as `admin/<date>-<id>.<ext>` and the response is
+  `{image_url, key, size, content_type}`; put `image_url` in the send request. 503 until image storage is configured.
+
+### Image storage (MinIO)
+
+Uploads go to an S3-compatible bucket: the server's MinIO, bucket `notificationimages`, which is publicly readable at
+`https://s3.flavourslane.com/notificationimages`. Configure it in the `s3` section of `credentials.json`
+(`endpoint`, `access_key`, `secret_key`, optional `bucket` and `public_base_url`), or with the environment variables
+`S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`, `S3_PUBLIC_BASE_URL`, which take precedence. From the
+cluster use MinIO's address directly (`http://192.168.1.24:9000`), not the Cloudflare hostname. Give the service its
+own MinIO user that can only write to that bucket rather than the root keys.
 
 ### `POST /notifications/send`, needs `Authorization: Bearer <admin_api_key>`
 

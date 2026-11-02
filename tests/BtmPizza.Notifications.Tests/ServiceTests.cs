@@ -33,6 +33,19 @@ public sealed class RecordingNotificationLog : INotificationLog
     }
 }
 
+/// <summary>Stands in for the MinIO bucket so the tests need no object storage.</summary>
+public sealed class RecordingImageStore : BtmPizza.Notifications.Images.IImageStore
+{
+    public readonly ConcurrentDictionary<string, (byte[] Data, string ContentType)> Stored = new();
+    public bool IsConfigured { get; set; } = true;
+
+    public Task<string> PutAsync(string key, byte[] data, string contentType, CancellationToken ct)
+    {
+        Stored[key] = (data, contentType);
+        return Task.FromResult("https://s3.test/notificationimages/" + key);
+    }
+}
+
 /// <summary>
 /// Runs the real API against two fake APNs servers (sandbox and production) speaking HTTP/2.
 /// The outcome of each push is chosen by the device token's first byte.
@@ -43,6 +56,7 @@ public sealed class ServiceFixture : IAsyncLifetime
     public readonly ECDsa SigningKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     public readonly ConcurrentQueue<ReceivedPush> Received = new();
     public readonly RecordingNotificationLog NotificationLog = new();
+    public readonly RecordingImageStore Images = new();
     public string DbPath => Path.Combine(_dir, "test.db");
     public HttpClient Client { get; private set; } = null!;
 
@@ -98,7 +112,11 @@ public sealed class ServiceFixture : IAsyncLifetime
                 ["Apns:SandboxUrl"] = _sandbox.Urls.First(),
                 ["Apns:ProductionUrl"] = _production.Urls.First(),
             }))
-            .ConfigureTestServices(s => s.AddSingleton<INotificationLog>(NotificationLog)));
+            .ConfigureTestServices(s =>
+            {
+                s.AddSingleton<INotificationLog>(NotificationLog);
+                s.AddSingleton<BtmPizza.Notifications.Images.IImageStore>(Images);
+            }));
         Client = _factory.CreateClient();
     }
 
