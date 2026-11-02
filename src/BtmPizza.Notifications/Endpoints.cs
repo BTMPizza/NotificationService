@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using BtmPizza.Notifications.Apns;
 using BtmPizza.Notifications.Configuration;
 using BtmPizza.Notifications.Data;
+using BtmPizza.Notifications.Images;
 using BtmPizza.Notifications.Payload;
 using Microsoft.AspNetCore.Http.Features;
 
@@ -38,6 +39,7 @@ public static partial class Endpoints
                 {
                     ValidationException v => (422, (object)new { error = "validation_failed", details = v.Errors }),
                     ApnsNotConfiguredException => (503, new { error = ex.Message }),
+                    ImageStorageNotConfiguredException => (503, new { error = ex.Message }),
                     HttpError h => (h.Status, new { error = h.Message }),
                     JsonException => (400, new { error = "request body must be valid JSON" }),
                     BadHttpRequestException b => (b.StatusCode, new { error = b.StatusCode == 413 ? "request body too large" : "bad request" }),
@@ -181,6 +183,28 @@ public static partial class Endpoints
                 }),
                 page, page_size = pageSize, total_count = total, has_more = (long)page * pageSize < total,
             });
+        });
+
+        // The image goes in the raw body (Content-Type image/jpeg, image/png or image/gif; checked by its bytes), at
+        // most 5 MB. It's stored in the public notification-images bucket and its https URL is returned for image_url.
+        app.MapPost("/api/admin/notifications/images", async (HttpContext ctx, IImageStore images) =>
+        {
+            RequireOwner(ctx);
+            if (!images.IsConfigured) throw new ImageStorageNotConfiguredException();
+            if (ctx.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } limit) limit.MaxRequestBodySize = ImageFormat.MaxBytes;
+            if (ctx.Request.ContentLength > ImageFormat.MaxBytes) throw new HttpError(413, "image too large: the limit is 5 MB");
+
+            using var buffer = new MemoryStream();
+            await ctx.Request.Body.CopyToAsync(buffer, ctx.RequestAborted);
+            var data = buffer.ToArray();
+            if (data.Length == 0) throw new ValidationException("send the image file as the request body");
+            if (data.Length > ImageFormat.MaxBytes) throw new HttpError(413, "image too large: the limit is 5 MB");
+            var format = ImageFormat.Detect(data) ?? throw new ValidationException("the file must be a JPEG, PNG or GIF image");
+
+            var key = $"admin/{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid():N}.{format.Extension}";
+            var url = await images.PutAsync(key, data, format.ContentType, ctx.RequestAborted);
+            app.Logger.LogInformation("Owner {CustomerId} uploaded notification image {Key} ({Bytes} bytes)", CallerCustomerId(ctx), key, data.Length);
+            return Results.Ok(new { image_url = url, key, size = data.Length, content_type = format.ContentType });
         });
 
         app.MapGet("/api/admin/notifications/audience", (HttpContext ctx, DeviceStore store) =>

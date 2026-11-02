@@ -54,6 +54,14 @@ builder.Services.AddSingleton<INotificationLog>(sp =>
     return new MongoNotificationLog(url);
 });
 builder.Services.AddSingleton<NotificationSender>();
+builder.Services.AddSingleton<BtmPizza.Notifications.Images.IImageStore>(sp =>
+{
+    var storage = sp.GetRequiredService<Credentials>().ImageStorage;
+    if (storage is null)
+        sp.GetRequiredService<ILogger<BtmPizza.Notifications.Images.S3ImageStore>>().LogWarning(
+            "s3 not set in credentials.json; the admin app can't upload notification images");
+    return new BtmPizza.Notifications.Images.S3ImageStore(storage);
+});
 if (!isCli) builder.Services.AddHostedService<RabbitMqConsumer>();
 
 var app = builder.Build();
