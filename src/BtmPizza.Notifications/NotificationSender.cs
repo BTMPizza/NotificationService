@@ -84,7 +84,8 @@ public sealed class NotificationSender(
                 removed_tokens = removed,
                 failure_reasons = failureReasons,
             }));
-        store.InsertSendLog(new SendLogEntry(notificationId, req.Type, devices.Count, success, failure, removed, body));
+        store.InsertSendLog(new SendLogEntry(notificationId, req.Type, devices.Count, success, failure, removed, body,
+            req.Title, req.Body, req.ImageUrl, req.Target));
         await WriteNotificationLogAsync(sentAt, notificationId, payload);
 
         return new SendResult(notificationId, false, req.Type, devices.Count, success, failure, removed,

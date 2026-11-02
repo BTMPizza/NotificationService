@@ -12,7 +12,14 @@ public sealed record Device(string DeviceToken, string UserId, string Environmen
 public sealed record TargetDevice(string DeviceToken, string Environment);
 
 public sealed record SendLogEntry(
-    string NotificationId, string Type, int TargetCount, int SuccessCount, int FailureCount, int RemovedTokens, string Payload);
+    string NotificationId, string Type, int TargetCount, int SuccessCount, int FailureCount, int RemovedTokens, string Payload,
+    string? Title = null, string? Body = null, string? ImageUrl = null, Target? Target = null);
+
+/// <summary>A row of the send log for the admin app. Title, body, image and target are null for sends logged before
+/// they were recorded.</summary>
+public sealed record SendLogItem(
+    string NotificationId, string Type, string? Title, string? Body, string? ImageUrl, bool? TargetAll,
+    IReadOnlyList<string>? TargetUserIds, int TargetCount, int SuccessCount, int FailureCount, string SentAt);
 
 /// <summary>SQLite storage for device tokens and the send log.</summary>
 public sealed class DeviceStore
@@ -53,12 +60,20 @@ public sealed class DeviceStore
 
         // Added with the app's /api/devices/register call; older databases get the columns here.
         foreach (var column in new[] { "bundle_id", "app_version" })
-        {
-            using var check = conn.CreateCommand();
-            check.CommandText = "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name = $name";
-            check.Parameters.AddWithValue("$name", column);
-            if ((long)check.ExecuteScalar()! == 0) Execute(conn, $"ALTER TABLE devices ADD COLUMN {column} TEXT");
-        }
+            AddColumnIfMissing(conn, "devices", column, "TEXT");
+
+        // Added for the admin app's send log: what was sent and to whom. Older rows keep NULLs.
+        foreach (var (column, type) in new[] { ("title", "TEXT"), ("body", "TEXT"), ("image_url", "TEXT"), ("target_all", "INTEGER"), ("target_user_ids", "TEXT") })
+            AddColumnIfMissing(conn, "notification_log", column, type);
+        Execute(conn, "CREATE INDEX IF NOT EXISTS idx_notification_log_sent_at ON notification_log(sent_at)");
+    }
+
+    private static void AddColumnIfMissing(SqliteConnection conn, string table, string column, string type)
+    {
+        using var check = conn.CreateCommand();
+        check.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $name";
+        check.Parameters.AddWithValue("$name", column);
+        if ((long)check.ExecuteScalar()! == 0) Execute(conn, $"ALTER TABLE {table} ADD COLUMN {column} {type}");
     }
 
     private SqliteConnection Open()
@@ -181,10 +196,71 @@ public sealed class DeviceStore
         using var conn = Open();
         Execute(conn, """
             INSERT INTO notification_log
-              (notification_id, type, target_count, success_count, failure_count, removed_tokens, payload)
-            VALUES ($id, $type, $target, $success, $failure, $removed, $payload)
+              (notification_id, type, target_count, success_count, failure_count, removed_tokens, payload,
+               title, body, image_url, target_all, target_user_ids)
+            VALUES ($id, $type, $target, $success, $failure, $removed, $payload,
+                    $title, $body, $image, $targetAll, $targetUsers)
             """,
             ("$id", e.NotificationId), ("$type", e.Type), ("$target", e.TargetCount), ("$success", e.SuccessCount),
-            ("$failure", e.FailureCount), ("$removed", e.RemovedTokens), ("$payload", e.Payload));
+            ("$failure", e.FailureCount), ("$removed", e.RemovedTokens), ("$payload", e.Payload),
+            ("$title", e.Title), ("$body", e.Body), ("$image", e.ImageUrl),
+            ("$targetAll", e.Target is null ? null : e.Target.All ? 1 : 0),
+            ("$targetUsers", e.Target is null || e.Target.All ? null : System.Text.Json.JsonSerializer.Serialize(e.Target.UserIds)));
+    }
+
+    /// <summary>
+    /// One page of the send log, newest first. With <paramref name="userId"/>, only sends that targeted that customer
+    /// (sends to everyone, or to a list naming them).
+    /// </summary>
+    public (IReadOnlyList<SendLogItem> Items, int TotalCount) ListSendLog(int page, int pageSize, string? userId)
+    {
+        using var conn = Open();
+        const string forUser = """
+            WHERE target_all = 1
+               OR EXISTS (SELECT 1 FROM json_each(notification_log.target_user_ids) WHERE json_each.value = $user)
+            """;
+        var where = userId is null ? "" : forUser;
+
+        using var count = conn.CreateCommand();
+        count.CommandText = $"SELECT COUNT(*) FROM notification_log {where}";
+        if (userId is not null) count.Parameters.AddWithValue("$user", userId);
+        var total = (int)(long)count.ExecuteScalar()!;
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT notification_id, type, title, body, image_url, target_all, target_user_ids,
+                   target_count, success_count, failure_count, sent_at
+            FROM notification_log {where}
+            ORDER BY sent_at DESC, rowid DESC
+            LIMIT $limit OFFSET $offset
+            """;
+        if (userId is not null) cmd.Parameters.AddWithValue("$user", userId);
+        cmd.Parameters.AddWithValue("$limit", pageSize);
+        cmd.Parameters.AddWithValue("$offset", (long)(page - 1) * pageSize);
+
+        var items = new List<SendLogItem>();
+        using var r = cmd.ExecuteReader();
+        string? Str(int i) => r.IsDBNull(i) ? null : r.GetString(i);
+        while (r.Read())
+        {
+            var users = Str(6) is { } json ? System.Text.Json.JsonSerializer.Deserialize<List<string>>(json) : null;
+            items.Add(new SendLogItem(r.GetString(0), r.GetString(1), Str(2), Str(3), Str(4),
+                r.IsDBNull(5) ? null : r.GetInt64(5) == 1, users,
+                r.GetInt32(7), r.GetInt32(8), r.GetInt32(9),
+                // SQLite's datetime('now') is UTC without a zone: make it ISO 8601 for clients.
+                r.GetString(10).Replace(' ', 'T') + "Z"));
+        }
+        return (items, total);
+    }
+
+    /// <summary>How many customers, and devices, can currently receive pushes.</summary>
+    public (int Customers, int Devices) CountAudience()
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(DISTINCT user_id), COUNT(*) FROM devices WHERE platform = 'ios'";
+        using var r = cmd.ExecuteReader();
+        r.Read();
+        return (r.GetInt32(0), r.GetInt32(1));
     }
 }
