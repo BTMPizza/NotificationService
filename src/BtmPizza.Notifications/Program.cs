@@ -1,3 +1,4 @@
+using BtmPizza.ConfigClient;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using BtmPizza.Notifications;
@@ -12,6 +13,9 @@ using BtmPizza.Notifications.Payload;
 // `dotnet run -- send-test ...` runs the test-send CLI instead of the web API.
 var isCli = args is ["send-test", ..];
 var builder = WebApplication.CreateBuilder(isCli ? [] : args);
+
+// Settings changed in the Admin app. Off unless ConfigService__BaseUrl is set; never stops startup.
+if (!isCli) builder.Configuration.AddConfigService("notificationservice");
 
 // Observability: logs -> Loki, traces -> Tempo, metrics -> Prometheus (OTLP; settings from OTEL_* env vars).
 if (!isCli) builder.AddBtmObservability();

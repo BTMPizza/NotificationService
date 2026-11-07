@@ -28,9 +28,14 @@ public sealed class NotificationSender(
     IApnsClient apns,
     IImageUrlVerifier imageVerifier,
     INotificationLog notificationLog,
+    IConfiguration configuration,
     ILogger<NotificationSender> logger)
 {
-    private const int Concurrency = 100;
+    private const int DefaultConcurrency = 100;
+
+    /// <summary>Read per send, so a change from the Admin app applies to the next one. Anything unusable keeps the default.</summary>
+    private int Concurrency =>
+        int.TryParse(configuration["Notifications:SendConcurrency"], out var value) && value > 0 ? value : DefaultConcurrency;
 
     // 410 means the token is no longer valid for this app (Unregistered / ExpiredToken).
     private static bool IsDeadToken(ApnsResult r) => r.Status == 410 || (r.Status == 400 && r.Reason == "BadDeviceToken");
