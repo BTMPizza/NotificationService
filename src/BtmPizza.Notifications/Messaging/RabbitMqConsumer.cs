@@ -129,7 +129,7 @@ public sealed partial class RabbitMqConsumer(
 
         try
         {
-            var result = await sender.SendAsync(input, ct);
+            var result = await sender.SendAsync(input, ct, imageOptional: true);
             if (result.DryRun)
                 logger.LogInformation("Dry run {NotificationId}: {TargetCount} target device(s), nothing sent",
                     result.NotificationId, result.TargetCount);

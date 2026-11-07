@@ -40,10 +40,43 @@ public sealed class NotificationSender(
     // 410 means the token is no longer valid for this app (Unregistered / ExpiredToken).
     private static bool IsDeadToken(ApnsResult r) => r.Status == 410 || (r.Status == 400 && r.Reason == "BadDeviceToken");
 
-    public async Task<SendResult> SendAsync(JsonNode? input, CancellationToken ct = default)
+    /// <param name="imageOptional">
+    /// For automatic pushes: an unusable image is logged and the notification goes out as text, because a customer's
+    /// coins or welcome message must never be lost to a bad picture. Sends made by hand leave this off, so the person
+    /// sending sees the error and can fix the image.
+    /// </param>
+    private SendRequest Validate(JsonNode? input, bool imageOptional)
     {
-        var req = SendRequestValidator.Validate(input);
-        var warnings = req.ImageUrl is null ? [] : await imageVerifier.VerifyAsync(req.ImageUrl, ct);
+        try
+        {
+            return SendRequestValidator.Validate(input);
+        }
+        catch (ValidationException ex) when (imageOptional && input is JsonObject message && message.ContainsKey("image_url")
+                                             && ex.Errors.All(e => e.StartsWith("image_url", StringComparison.Ordinal)))
+        {
+            logger.LogWarning("Sending without an invalid image: {Problems}", string.Join("; ", ex.Errors));
+            message.Remove("image_url");
+            return SendRequestValidator.Validate(message);
+        }
+    }
+
+    public async Task<SendResult> SendAsync(JsonNode? input, CancellationToken ct = default, bool imageOptional = false)
+    {
+        var req = Validate(input, imageOptional);
+        IReadOnlyList<string> warnings = [];
+        if (req.ImageUrl is not null)
+        {
+            try
+            {
+                warnings = await imageVerifier.VerifyAsync(req.ImageUrl, ct);
+            }
+            catch (ValidationException ex) when (imageOptional)
+            {
+                logger.LogWarning("Sending {Type} without its image {ImageUrl}: {Problems}", req.Type, req.ImageUrl, string.Join("; ", ex.Errors));
+                req = req with { ImageUrl = null };
+            }
+        }
+
         var notificationId = Guid.NewGuid().ToString();
         var payload = PayloadBuilder.Build(req, notificationId);
         var devices = store.FindTargets(req.Target);
