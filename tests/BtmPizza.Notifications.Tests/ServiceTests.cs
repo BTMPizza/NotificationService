@@ -53,6 +53,7 @@ public sealed class RecordingImageStore : BtmPizza.Notifications.Images.IImageSt
 public sealed class ServiceFixture : IAsyncLifetime
 {
     public const string AdminKey = "test-admin-key";
+    public const string DeleteKey = "test-delete-key";
     public readonly ECDsa SigningKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     public readonly ConcurrentQueue<ReceivedPush> Received = new();
     public readonly RecordingNotificationLog NotificationLog = new();
@@ -109,6 +110,7 @@ public sealed class ServiceFixture : IAsyncLifetime
             {
                 ["CredentialsPath"] = credentialsPath,
                 ["DbPath"] = DbPath,
+                ["AccountDeletion:ServiceKey"] = DeleteKey,
                 ["Apns:SandboxUrl"] = _sandbox.Urls.First(),
                 ["Apns:ProductionUrl"] = _production.Urls.First(),
             }))
