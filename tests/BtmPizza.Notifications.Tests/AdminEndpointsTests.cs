@@ -23,6 +23,35 @@ public sealed class AdminEndpointsTests(ServiceFixture fx) : IClassFixture<Servi
     private Task Register(string customerId, string token) =>
         fx.Client.PostAsJsonAsync("/devices", new { device_token = token, platform = "ios", user_id = customerId });
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("wrong-key")]
+    public async Task Deleting_a_customer_needs_the_service_key(string? key)
+    {
+        await Register("del-a", Token("d1"));
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/api/internal/customers/del-a/delete");
+        if (key is not null) req.Headers.Add("X-Service-Key", key);
+
+        var res = await fx.Client.SendAsync(req);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+    }
+
+    [Fact]
+    public async Task Deleting_a_customer_removes_their_devices_and_can_be_repeated()
+    {
+        await Register("del-b", Token("d2"));
+        for (var i = 0; i < 2; i++)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, "/api/internal/customers/del-b/delete");
+            req.Headers.Add("X-Service-Key", ServiceFixture.DeleteKey);
+            Assert.Equal(HttpStatusCode.NoContent, (await fx.Client.SendAsync(req)).StatusCode);
+        }
+
+        var store = new BtmPizza.Notifications.Data.DeviceStore(fx.DbPath);
+        Assert.Empty(store.FindTargets(new BtmPizza.Notifications.Payload.Target(false, ["del-b"])));
+    }
+
     [Fact]
     public async Task Only_owners_signed_in_through_the_gateway_get_in()
     {

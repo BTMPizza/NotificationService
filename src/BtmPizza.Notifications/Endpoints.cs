@@ -253,6 +253,19 @@ public static partial class Endpoints
             return Results.Ok(new { removed });
         });
 
+        // AuthService removes a customer who deleted their account. In-cluster only: the gateway never routes it.
+        // Safe to repeat, because AuthService retries until this succeeds.
+        app.MapPost("/api/internal/customers/{customerId}/delete", (string customerId, HttpContext ctx, IConfiguration config, DeviceStore store) =>
+        {
+            var expected = config["AccountDeletion:ServiceKey"] ?? "";
+            var presented = ctx.Request.Headers["X-Service-Key"].ToString();
+            if (expected.Length == 0 || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(presented), Encoding.UTF8.GetBytes(expected)))
+                throw new HttpError(401, "missing or invalid service key");
+            var devices = store.DeleteCustomer(customerId);
+            app.Logger.LogInformation("Deleted notification data for customer {CustomerId} ({Devices} device(s))", customerId, devices);
+            return Results.NoContent();
+        });
+
         app.MapPost("/notifications/send", async (HttpContext ctx, Credentials credentials, NotificationSender sender) =>
         {
             RequireAdmin(ctx, credentials.AdminApiKey);

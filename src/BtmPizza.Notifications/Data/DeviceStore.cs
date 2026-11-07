@@ -191,6 +191,37 @@ public sealed class DeviceStore
         return Execute(conn, "DELETE FROM devices WHERE device_token = $token", ("$token", deviceToken));
     }
 
+    /// <summary>
+    /// Removes a customer who deleted their account: their devices, the sends only they received, and their id from
+    /// sends to several people. Safe to repeat.
+    /// </summary>
+    public int DeleteCustomer(string userId)
+    {
+        using var conn = Open();
+        var removed = Execute(conn, "DELETE FROM devices WHERE user_id = $userId", ("$userId", userId));
+
+        var logs = new List<(string Id, string Users)>();
+        using (var find = conn.CreateCommand())
+        {
+            find.CommandText = "SELECT notification_id, target_user_ids FROM notification_log WHERE target_user_ids LIKE $match";
+            find.Parameters.AddWithValue("$match", $"%\"{userId}\"%");
+            using var reader = find.ExecuteReader();
+            while (reader.Read()) logs.Add((reader.GetString(0), reader.GetString(1)));
+        }
+
+        foreach (var (id, users) in logs)
+        {
+            var others = (System.Text.Json.JsonSerializer.Deserialize<List<string>>(users) ?? []).Where(u => u != userId).ToList();
+            if (others.Count == 0)
+                Execute(conn, "DELETE FROM notification_log WHERE notification_id = $id", ("$id", id));
+            else
+                Execute(conn, "UPDATE notification_log SET target_user_ids = $users WHERE notification_id = $id",
+                    ("$users", System.Text.Json.JsonSerializer.Serialize(others)), ("$id", id));
+        }
+
+        return removed;
+    }
+
     public void InsertSendLog(SendLogEntry e)
     {
         using var conn = Open();
